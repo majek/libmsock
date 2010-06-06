@@ -1,0 +1,6 @@
+Engine select/poll:
+ - add item
+ - modify only timer for that item
+ - modify both timer and read/write property.
+ - register read, register write immediately after
+
