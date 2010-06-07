@@ -2,17 +2,15 @@
 
 #include "msock_internal.h"
 
-#ifdef HELGRIND
-#include <valgrind/helgrind.h>
-#warning "Compiling helgrind hacks. This results in slow code."
-#endif
-
 DLL_PUBLIC msock_base msock_base_new(int engines, int max_processes)
 {
 	struct base *base = type_malloc(struct base);
 
 	INIT_MSQUEUE_ROOT(&base->queue_of_domains);
 	INIT_SPIN_LOCK(&base->lock);
+	INIT_MEM_ZONE(&base->zone_messages, sizeof(struct message));
+	INIT_MEM_ZONE(&base->zone_processes, sizeof(struct process));
+
 	INIT_LIST_HEAD(&base->list_of_domains);
 	INIT_LIST_HEAD(&base->list_of_workers);
 
@@ -27,6 +25,9 @@ DLL_PUBLIC void msock_base_free(msock_base mbase)
 	struct base *base = (struct base *)mbase;
 
 	engines_stop(base);
+
+	zone_free(&base->zone_messages);
+	zone_free(&base->zone_processes);
 
 	type_free(struct base, base);
 }
@@ -47,7 +48,7 @@ inline static void _send_indirect(struct domain *domain,
 		gid = pid_to_gid(target);
 	}
 
-	struct message *msg = mpool_malloc(&domain->mpool, struct message);
+	struct message *msg = cache_malloc(&domain->cache_messages, struct message);
 	msg->target = target;
 	msg->msg_type = msg_type;
 	msg->msg_payload_sz = msg_payload_sz;
@@ -79,7 +80,8 @@ inline static void _send_indirect(struct domain *domain,
 	       msg_type_tostr(msg_type), msg_payload_sz);
 #endif
 
-#ifdef HELGRIND
+#ifdef VALGRIND
+	/* Helgrind doesn't like sharing memory without locks. */
 	VALGRIND_HG_CLEAN_MEMORY(msg, sizeof(struct message));
 #endif
 }
@@ -113,7 +115,7 @@ DLL_LOCAL void send_indirect(struct domain *domain,
 	_send_indirect(domain, target, msg_type, msg_payload, msg_payload_sz);
 }
 
-DLL_LOCAL void drain_message_queue(struct queue_root *msgbox)
+DLL_LOCAL void drain_message_queue(struct domain *domain, struct queue_root *msgbox)
 {
 	while (1) {
 		struct queue_head *head = queue_get(msgbox);
@@ -121,7 +123,7 @@ DLL_LOCAL void drain_message_queue(struct queue_root *msgbox)
 			break;
 		}
 		struct message *msg = container_of(head, struct message, in_queue);
-		type_free(struct message, msg);
+		cache_free(&domain->cache_messages, struct message, msg);
 	}
 }
 
@@ -136,7 +138,7 @@ DLL_LOCAL int send_flush_outbox(struct domain *domain)
 		}
 		struct domain *victim = domain->base->gid_to_domain[gid];
 		if (unlikely(!victim)) {
-			drain_message_queue(qr);
+			drain_message_queue(domain, qr);
 			continue;
 		}
 
@@ -228,4 +230,23 @@ DLL_PUBLIC void msock_loopexit()
 DLL_PUBLIC char* msock_pid_tostr(msock_pid_t pid)
 {
 	return pid_tostr(pid);
+}
+
+DLL_PUBLIC void msock_memory_collect()
+{
+	struct domain *domain = get_current_process()->domain;
+	send_broadcast(domain, MSG_GC, NULL, 0);
+	send_flush_outbox(domain);
+}
+
+DLL_PUBLIC void msock_memory_stats(unsigned long *used_bytes_ptr)
+{
+	struct base *base = get_current_process()->domain->base;
+
+	unsigned long used_bytes =			\
+		zone_used_bytes(&base->zone_messages) +	\
+		zone_used_bytes(&base->zone_processes);
+	if (used_bytes_ptr) {
+		*used_bytes_ptr = used_bytes;
+	}
 }

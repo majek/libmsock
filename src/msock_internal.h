@@ -16,7 +16,6 @@
 #define MAX_DOMAINS (MSOCK_MAX_DOMAINS)
 #define MAX_REG_NAMES (32)
 
-struct mpool;
 struct base;
 struct engine_proto;
 struct message;
@@ -24,7 +23,7 @@ struct message;
 static inline unsigned long pid_to_poff(msock_pid_t mpid);
 
 #include "msock_utils.h"
-#include "msock_mpool.h"
+#include "memalloc.h"
 
 #include "msock_base.h"
 #include "msock_domain.h"

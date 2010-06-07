@@ -3,25 +3,27 @@
 
 struct domain {
 	spinlock_t lock;
+	struct umap_root *poff_to_process;
+	struct queue_root queue_of_busy_processes;
+
+	struct mem_cache cache_messages;
+	struct mem_cache cache_processes;
+
 	spinlock_t remote_inbox_lock;
 	struct queue_root remote_inbox;
 
+	struct queue_root local_inbox;
+
 	struct engine_proto *proto;
 	void *ingress_callback_data;
-
-	struct queue_root local_inbox;
 
 	struct base *base;
 	struct list_head in_list;
 	struct msqueue_head in_queue;
 	int gid;
 
-	struct umap_root *poff_to_process;
 	struct list_head list_of_processes;
-	struct queue_root queue_of_busy_processes;
 	struct list_head list_of_hungry_processes;
-
-	struct mpool_root mpool;
 
 	struct queue_root outbox[MAX_DOMAINS];
 };

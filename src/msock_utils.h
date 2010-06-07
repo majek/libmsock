@@ -2,6 +2,11 @@
 #define _MSOCK_UTILS_H
 
 #include <stdlib.h>
+#include <string.h>
+#include "config.h"
+
+#define cacheline_align(i) \
+	((((i) + (CACHELINE_SIZE-1)) / CACHELINE_SIZE) * CACHELINE_SIZE)
 
 #define type_malloc(type)				\
 	((type*)msock_safe_malloc(sizeof(type)))
@@ -12,6 +17,39 @@
 		msock_safe_free(sizeof(type), a);	\
 	} while (0)
 
+#define fast_memcpy(_dest, _src, _size)			\
+	do {						\
+		void *dest = (_dest);			\
+		void *src = (_src);			\
+		size_t size = (_size);			\
+		if (__builtin_constant_p(size)) {	\
+			char *d = dest;			\
+			char *s = src;			\
+			int i;				\
+			for (i=0; i < size; i++) {	\
+				d[i] = s[i];		\
+			}				\
+		} else {				\
+			memcpy(dest, src, size);	\
+		}					\
+	} while (0)
+
+#define fast_memset(_dest, _c, _size)			\
+	do {						\
+		void *dest = (_dest);			\
+		int c = (_c);				\
+		size_t size = (_size);			\
+		if (__builtin_constant_p(size)) {	\
+			char *d = (void*)dest;		\
+			int i;				\
+			for (i=0; i < size; i++) {	\
+				d[i] = c;		\
+			}				\
+		} else {				\
+			memset(dest, c, size);		\
+		}					\
+	} while (0)
+
 
 DLL_LOCAL void fatal(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
 DLL_LOCAL void pfatal(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
@@ -19,14 +57,17 @@ DLL_LOCAL void pfatal(const char *fmt, ...) __attribute__ ((format (printf, 1, 2
 DLL_LOCAL void safe_printf(const char *fmt, ...) __attribute__ ((format (printf, 1, 2)));
 DLL_LOCAL int get_max_open_files();
 DLL_LOCAL unsigned long long now_msecs();
+DLL_LOCAL void set_msock_now_msecs();
 
 
 static inline void *msock_safe_malloc(size_t size)
 {
-	void *ptr = calloc(1, size);
-	if (unlikely(ptr == NULL)) {
-		fatal("Memory allocation failed!");
+	void *ptr;
+	int r = posix_memalign(&ptr, CACHELINE_SIZE, size);
+	if (unlikely(r != 0)) {
+		pfatal("Memory allocation failed! posix_memalign()");
 	}
+	memset(ptr, 0, size);
 	return ptr;
 }
 
@@ -96,39 +137,6 @@ static inline void msock_safe_free(size_t size, void *ptr)
 		(a).tv_nsec %= _NANO;			       \
 	}
 
-
-#define fast_memcpy(_dest, _src, _size)			\
-	do {						\
-		void *dest = (_dest);			\
-		void *src = (_src);			\
-		size_t size = (_size);			\
-		if (__builtin_constant_p(size)) {	\
-			char *d = dest;			\
-			char *s = src;			\
-			int i;				\
-			for (i=0; i < size; i++) {	\
-				d[i] = s[i];		\
-			}				\
-		} else {				\
-			memcpy(dest, src, size);	\
-		}					\
-	} while (0)
-
-#define fast_memset(_dest, _c, _size)			\
-	do {						\
-		void *dest = (_dest);			\
-		int c = (_c);				\
-		size_t size = (_size);			\
-		if (__builtin_constant_p(size)) {	\
-			char *d = (void*)dest;		\
-			int i;				\
-			for (i=0; i < size; i++) {	\
-				d[i] = c;		\
-			}				\
-		} else {				\
-			memset(dest, c, size);		\
-		}					\
-	} while (0)
 
 static inline unsigned long long _rdtsc(void)
 {

@@ -21,7 +21,7 @@
 
 #include "msock_internal.h"
 
-#define MAX_SIGNALS (64+1)
+#define MAX_SIGNALS (SIGUNUSED+1)
 
 
 struct local_data {
@@ -79,6 +79,8 @@ static void engine_constructor(struct base *base,
 	sigdelset(&sd->blocked, SIGFPE);
 	sigdelset(&sd->blocked, SIGILL);
 	sigdelset(&sd->blocked, SIGSEGV);
+	sigdelset(&sd->blocked, SIGABRT);
+	sigdelset(&sd->blocked, 64); /* SIGRT32 is used by valgrind. */
 
 	int r = sigprocmask(SIG_BLOCK, &sd->blocked, NULL);
 	if (r != 0) {

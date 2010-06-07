@@ -1,3 +1,6 @@
+#ifndef _SPINLOCK_H
+#define _SPINLOCK_H
+
 /* Simple implementation of spin locks. Api based on Linux Kernel. */
 #include <pthread.h>
 #include <errno.h>
@@ -8,7 +11,7 @@
 /* Valgrind/Helgrind doesn't support spinlocks yet - so we need to emulate
  * them on mutexes. It shouldn't be too hard. */
 struct spinlock {
-#ifndef HELGRIND
+#ifndef VALGRIND
 	pthread_spinlock_t l;
 #else
 	pthread_mutex_t m;
@@ -22,7 +25,7 @@ typedef struct spinlock spinlock_t;
 
 static inline void spin_lock_init(spinlock_t *lock) {
 	/* ignore errors, they can't happen in real world */
-#ifndef HELGRIND
+#ifndef VALGRIND
 	pthread_spin_init(&lock->l, PTHREAD_PROCESS_PRIVATE);
 #else
 	pthread_mutex_init(&lock->m, NULL);
@@ -30,7 +33,7 @@ static inline void spin_lock_init(spinlock_t *lock) {
 }
 
 static inline void spin_lock(spinlock_t *lock) {
-#ifndef HELGRIND
+#ifndef VALGRIND
 	int i;
 	for (i=0; i < SPINLOCK_ACQUIRE_TRIES; i++) {
 		if(EBUSY != pthread_spin_trylock(&lock->l)) {
@@ -49,9 +52,11 @@ static inline void spin_lock(spinlock_t *lock) {
 }
 
 static inline void spin_unlock(spinlock_t *lock) {
-#ifndef HELGRIND
+#ifndef VALGRIND
 	pthread_spin_unlock(&lock->l);
 #else
 	pthread_mutex_unlock(&lock->m);
 #endif
 }
+
+#endif // _SPINLOCK_H

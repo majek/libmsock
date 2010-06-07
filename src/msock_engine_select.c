@@ -5,8 +5,6 @@
 #include "timer.h"
 #include "msock_internal.h"
 
-DLL_PUBLIC unsigned long msock_now_msecs;
-
 struct select_data;
 
 struct local_item {
@@ -64,7 +62,7 @@ static void select_constructor(struct base *base,
 		pfatal("pipe()");
 	}
 	sd->pipe_read = pipefd[0];
-	msock_now_msecs = now_msecs();
+	set_msock_now_msecs();
 	INIT_TIMER_BASE(&sd->tbase, msock_now_msecs);
 
 	struct domain *domain = domain_new(base, proto,
@@ -187,7 +185,7 @@ do_select:
 		}
 	}
 
-	msock_now_msecs = now_msecs();
+	set_msock_now_msecs();
 	timers_run(&sd->tbase, msock_now_msecs);
 }
 

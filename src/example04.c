@@ -4,10 +4,13 @@
 
 #include "msock.h"
 
+#define DELAY 1234
 
 enum msock_recv callback(int msg_type, void *msg_payload, int msg_payload_sz,
 			 void *process_data)
 {
+	unsigned long used_bytes;
+
 	switch(msg_type) {
 	case MSG_FD_READ: {
 		char buf[256] = {0};
@@ -23,12 +26,14 @@ enum msock_recv callback(int msg_type, void *msg_payload, int msg_payload_sz,
 		break;}
 
 	case MSG_IO_FSYNC:
-		msock_send_msg_fd(MSG_FD_REGISTER_READ, 0, 12345);
+		msock_send_msg_fd(MSG_FD_REGISTER_READ, 0, DELAY);
 		break;
 
 	case MSG_FD_TIMEOUTED:
-		printf("timeout...\n");
-		msock_send_msg_fd(MSG_FD_REGISTER_READ, 0, 12345);
+		msock_memory_stats(&used_bytes);
+		printf("timeout... (%lu bytes memory used)\n", used_bytes);
+		msock_memory_collect();
+		msock_send_msg_fd(MSG_FD_REGISTER_READ, 0, DELAY);
 		break;
 
 	case MSG_EXIT:
@@ -53,7 +58,7 @@ int main(int argc, char **argv)
 					 , 32);
 
 	msock_pid_t pid = msock_base_spawn(base, &callback, NULL);
-	msock_base_send_msg_fd(base, pid, MSG_FD_REGISTER_READ, 0, 12345);
+	msock_base_send_msg_fd(base, pid, MSG_FD_REGISTER_READ, 0, DELAY);
 	msock_base_send_msg_signal(base, pid, MSG_SIGNAL_REGISTER, SIGINT);
 	msock_base_send_msg_signal(base, pid, MSG_SIGNAL_REGISTER, SIGUSR1);
 

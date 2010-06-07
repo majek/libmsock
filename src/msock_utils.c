@@ -73,3 +73,15 @@ DLL_LOCAL unsigned long long now_msecs()
 	return (unsigned long long)ts.tv_sec * 1000L + \
 		(unsigned long long)ts.tv_nsec / 1000000;
 }
+
+DLL_PUBLIC unsigned long msock_now_msecs;
+
+DLL_LOCAL void set_msock_now_msecs()
+{
+	#ifdef VALGRIND
+	VALGRIND_HG_CLEAN_MEMORY(&msock_now_msecs, sizeof(msock_now_msecs));
+	#endif
+
+	// make helgrind happy...
+	msock_now_msecs = now_msecs();
+}

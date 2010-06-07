@@ -4,7 +4,6 @@
 #include "timer.h"
 #include "msock_internal.h"
 
-DLL_PUBLIC unsigned long msock_now_msecs;
 
 struct local_data;
 
@@ -64,7 +63,8 @@ static void epoll_constructor(struct base *base,
 	}
 	INIT_LIST_HEAD(&sd->changed);
 
-	msock_now_msecs = now_msecs();
+	set_msock_now_msecs();
+
 	INIT_TIMER_BASE(&sd->tbase, msock_now_msecs);
 
 
@@ -229,7 +229,7 @@ do_again:;
 		}
 	}
 
-	msock_now_msecs = now_msecs();
+	set_msock_now_msecs();
 	timers_run(&sd->tbase, msock_now_msecs);
 
 }

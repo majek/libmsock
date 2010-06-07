@@ -6,7 +6,9 @@ DLL_LOCAL struct process *process_new(struct domain *domain,
 				      void *receive_data,
 				      int procopt)
 {
-	struct process *process = type_malloc(struct process);
+	struct process *process = cache_malloc(&domain->cache_processes,
+					       struct process);
+	memset(process, 0, sizeof(struct process));
 
 	process->domain = domain;
 	unsigned long poff = umap_add(domain->poff_to_process, process);
@@ -28,14 +30,14 @@ DLL_LOCAL struct process *process_new(struct domain *domain,
 		list_add(&process->in_hungry_list,
 			 &domain->list_of_hungry_processes);
 	}
-	INIT_MSQUEUE_ROOT(&process->qqq);
-
 	return process;
 }
 
 
 DLL_LOCAL void process_free(struct process *process)
 {
+	struct domain *domain = process->domain;
+
 	unsigned long poff = pid_to_poff(process->pid);
 	umap_del(process->domain->poff_to_process, poff);
 
@@ -48,15 +50,15 @@ DLL_LOCAL void process_free(struct process *process)
 	if ( !list_empty(&process->in_hungry_list) ) {
 		list_del(&process->in_hungry_list);
 	}
-	drain_message_queue(&process->inbox);
-	drain_message_queue(&process->badmatch);
+	drain_message_queue(domain, &process->inbox);
+	drain_message_queue(domain, &process->badmatch);
 
 	process->domain = NULL;
 	process->pid = 0;
 	process->receive_data = NULL;
 	process->receive_callback = NULL;
 
-	type_free(struct process, process);
+	cache_free(&domain->cache_processes, struct process, process);
 }
 
 
@@ -84,14 +86,16 @@ DLL_LOCAL void process_run(struct process *process)
 						     process->receive_data);
 		switch (recv) {
 		case RECV_OK:
-			mpool_free(&process->domain->mpool, struct message, msg);
+			cache_free(&process->domain->cache_messages,
+				   struct message, msg);
 			break;
 		case RECV_BADMATCH:
 			queue_put(&msg->in_queue,
 				  &process->badmatch);
 			break;
 		case RECV_EXIT:
-			mpool_free(&process->domain->mpool, struct message, msg);
+			cache_free(&process->domain->cache_messages,
+				   struct message, msg);
 			process_free(process);
 			return;
 		default:

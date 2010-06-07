@@ -47,7 +47,8 @@ DLL_LOCAL struct domain *domain_new(struct base *base,
 	INIT_LIST_HEAD(&domain->list_of_hungry_processes);
 	INIT_QUEUE_ROOT(&domain->queue_of_busy_processes);
 
-	INIT_MPOOL_ROOT(&domain->mpool);
+	INIT_MEM_CACHE(&domain->cache_messages, &base->zone_messages);
+	INIT_MEM_CACHE(&domain->cache_processes, &base->zone_processes);
 
 	int i;
 	for (i=0; i < ARRAY_SIZE(domain->outbox); i++) {
@@ -65,15 +66,16 @@ DLL_LOCAL void domain_free(struct domain *domain)
 	domain->proto->destructor(domain->ingress_callback_data);
 	domain->ingress_callback_data = NULL;
 
-	drain_message_queue(&domain->remote_inbox);
-	drain_message_queue(&domain->local_inbox);
+	drain_message_queue(domain, &domain->remote_inbox);
+	drain_message_queue(domain, &domain->local_inbox);
 
 	domain->base->gid_to_domain[domain->gid] = NULL;
 	list_del(&domain->in_list);
 
 	umap_free(domain->poff_to_process);
 
-	mpool_drain(&domain->mpool);
+	cache_drain(&domain->cache_messages);
+	cache_drain(&domain->cache_processes);
 
 	type_free(struct domain, domain);
 }
@@ -83,7 +85,6 @@ static inline void dispatch_msg_single(struct process *process, struct message *
 	int was_empty = queue_put(&msg->in_queue,
 				  &process->inbox);
 	if (was_empty) {
-		/* !queue_is_enqueued(&process->in_busy_queue)) { */
 		queue_put(&process->in_busy_queue,
 			  &process->domain->queue_of_busy_processes);
 	}
@@ -91,8 +92,9 @@ static inline void dispatch_msg_single(struct process *process, struct message *
 
 static struct message *message_clone(struct domain *domain, struct message *org)
 {
-	struct message *dst = mpool_malloc(&domain->mpool, struct message);
-	fast_memcpy(dst, org, sizeof(struct message)); // TODO: a bit pessimistic
+	struct message *dst = cache_malloc(&domain->cache_messages, struct message);
+	fast_memcpy(dst, org, sizeof(struct message) -
+		    MAX_MSG_PAYLOAD_SZ + org->msg_payload_sz);
 	return dst;
 }
 
@@ -105,7 +107,19 @@ static void dispatch_msg_broadcast(struct domain *domain, struct message *msg)
 		struct message *lmsg = message_clone(domain, msg);
 		dispatch_msg_single(process, lmsg);
 	}
-	mpool_free(&domain->mpool, struct message, msg);
+	cache_free(&domain->cache_messages, struct message, msg);
+}
+
+static void dispatch_special(struct domain *domain, struct message *msg)
+{
+	if (msg->msg_type == MSG_GC) {
+		cache_free(&domain->cache_messages, struct message, msg);
+
+		cache_drain(&domain->cache_messages);
+		cache_drain(&domain->cache_processes);
+	} else {
+		abort();
+	}
 }
 
 DLL_LOCAL int dispatch_msg_local(struct domain *domain, struct message *msg)
@@ -115,15 +129,22 @@ DLL_LOCAL int dispatch_msg_local(struct domain *domain, struct message *msg)
 	if (likely(poff != 0)) {
 		struct process *process = (struct process*)	\
 			umap_get(domain->poff_to_process, poff);
+
 		if (likely(process != NULL)) {
 			counter ++;
 			dispatch_msg_single(process, msg);
 		} else { // process == NULL
-			mpool_free(&domain->mpool, struct message, msg);
+			cache_free(&domain->cache_messages, struct message, msg);
 		}
 	} else { // poff == 0,  aka broadcast
 		counter ++;
-		dispatch_msg_broadcast(domain, msg);
+		if (msg->msg_type == MSG_GC) {
+			/* special messages - to domain, not to processes */
+			dispatch_special(domain, msg);
+		} else {
+			/* normal broadcast - copy over to everybody */
+			dispatch_msg_broadcast(domain, msg);
+		}
 	}
 	return counter;
 }
@@ -136,7 +157,8 @@ static int dispatch_local_inbox(struct domain *domain)
 		if (head == NULL) {
 			break;
 		}
-		struct message *msg = container_of(head, struct message, in_queue);
+		struct message *msg = \
+			container_of(head, struct message, in_queue);
 		counter += dispatch_msg_local(domain, msg);
 	}
 	return counter;
@@ -145,7 +167,8 @@ static int dispatch_local_inbox(struct domain *domain)
 static void process_queue_run(struct domain *domain)
 {
 	while (1) {
-		struct queue_head *head = queue_get(&domain->queue_of_busy_processes);
+		struct queue_head *head = \
+			queue_get(&domain->queue_of_busy_processes);
 		if (head == NULL) {
 			break;
 		}

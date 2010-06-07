@@ -96,6 +96,7 @@ enum msock_msgs {
 //	MSG_TIMER_UNREGISTER,
 
 	MSG_EXIT,
+	MSG_GC,
 	MSG_QUEUE_EMPTY,
 
 	MSG_USER
@@ -138,6 +139,8 @@ DLL_PUBLIC void msock_base_send_msg_signal(msock_base base,
 					   msock_pid_t victim,
 					   int msg_type,
 					   int signum);
+DLL_PUBLIC void msock_memory_collect();
+DLL_PUBLIC void msock_memory_stats(unsigned long *used_bytes_ptr);
 
 
 #ifdef __cplusplus

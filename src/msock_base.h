@@ -6,6 +6,10 @@ struct domain;
 struct base {
 	struct msqueue_root queue_of_domains;
 
+	// Locking is done inside mem_zones.
+	struct mem_zone zone_messages;
+	struct mem_zone zone_processes;
+
 	spinlock_t lock;
 	struct domain *gid_to_domain[MAX_DOMAINS];
 	struct list_head list_of_domains;
@@ -25,7 +29,8 @@ DLL_LOCAL void send_indirect(struct domain *domain,
 			     int msg_type,
 			     void* msg_payload, int msg_payload_sz);
 DLL_LOCAL int send_flush_outbox(struct domain *domain);
-DLL_LOCAL void drain_message_queue(struct queue_root *msgbox);
+DLL_LOCAL void drain_message_queue(struct domain *domain,
+				   struct queue_root *msgbox);
 
 
 #endif // _MSOCK_BASE_H

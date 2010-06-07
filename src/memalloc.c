@@ -21,14 +21,7 @@
 #include <stdlib.h> // posix_memalign
 
 #include "memalloc.h"
-#include "msock_utils.h" // pfatal
-
-/* Must be a power of 2. Setting it to actual page size might be beneficial. */
-#define MEM_PAGE_SIZE (4096)
-/* To avoid fighting over cache lines, align chunks. */
-#define MEM_CACHELINE_SIZE (64)
-
-#define cacheline_align(i) (((i) + (MEM_CACHELINE_SIZE-1)) / MEM_CACHELINE_SIZE)
+#include "msock_utils.h" // pfatal, cacheline_align
 
 
 struct mem_page {
@@ -37,12 +30,6 @@ struct mem_page {
 	int free_chunks;
 };
 
-struct mem_chunk {
-	struct queue_head in_queue;
-};
-
-static void cache_fill(struct mem_cache *cache);
-static void cache_drain(struct mem_cache *cache);
 static void page_alloc(struct mem_zone *zone);
 static void page_free(struct mem_zone *zone, struct mem_page *page);
 
@@ -52,14 +39,34 @@ DLL_LOCAL void init_mem_zone(struct mem_zone *zone, int chunk_size)
 	zone->chunk_size = chunk_size;
 	zone->aligned_chunk_size = cacheline_align(chunk_size);
 
-	int avail_bytes = MEM_PAGE_SIZE \
+	int avail_bytes = PAGE_SIZE \
 		- cacheline_align(sizeof(struct mem_page));
 	zone->chunks_per_page = avail_bytes / zone->aligned_chunk_size;
 	zone->alloc_pages = 0;
 	zone->freed_pages = 0;
 	zone->free_chunks = 0;
+
+	if (chunk_size < sizeof(struct mem_chunk) ||
+	    zone->chunks_per_page < 2) {
+		abort();
+	}
+
 	INIT_LIST_HEAD(&zone->list_of_pages);
 }
+
+DLL_LOCAL void zone_free(struct mem_zone *zone)
+{
+	if (!list_empty(&zone->list_of_pages)) {
+		abort();
+	}
+	if (zone->freed_pages != zone->alloc_pages) {
+		abort();
+	}
+	if (zone->free_chunks != 0) {
+		abort();
+	}
+}
+
 
 DLL_LOCAL void init_mem_cache(struct mem_cache *cache, struct mem_zone *zone)
 {
@@ -67,33 +74,8 @@ DLL_LOCAL void init_mem_cache(struct mem_cache *cache, struct mem_zone *zone)
 	INIT_QUEUE_ROOT(&cache->queue_of_free_chunks);
 }
 
-DLL_LOCAL void *mem_alloc(struct mem_cache *cache)
-{
-	struct queue_head *head = queue_get(&cache->queue_of_free_chunks);
-	if (!head) {
-		cache_fill(cache);
-		head = queue_get(&cache->queue_of_free_chunks);
-	}
-	struct mem_chunk *chunk = \
-		container_of(head, struct mem_chunk, in_queue);
-	return chunk;
-}
-
-DLL_LOCAL void mem_free(struct mem_cache *cache, void *v_chunk)
-{
-	struct mem_chunk *chunk = v_chunk;
-	/* Keep warm memory on top of the stack. */
-	queue_put_head(&chunk->in_queue,
-		       &cache->queue_of_free_chunks);
-}
-
-DLL_LOCAL void mem_gc(struct mem_cache *cache)
-{
-	cache_drain(cache);
-}
-
 /* Gives cache at least 'chunks_per_page' free chunks. */
-static void cache_fill(struct mem_cache *cache)
+DLL_LOCAL void _cache_fill(struct mem_cache *cache)
 {
 	struct mem_zone *zone = cache->zone;
 	spin_lock(&zone->lock);
@@ -123,13 +105,8 @@ static void cache_fill(struct mem_cache *cache)
 	spin_unlock(&zone->lock);
 }
 
-static struct mem_page *page_from_chunk(struct mem_chunk *chunk)
-{
-	void *v_page = (void*)((unsigned long)chunk % MEM_PAGE_SIZE);
-	return (struct mem_page *)v_page;
-}
 
-static void cache_drain(struct mem_cache *cache)
+DLL_LOCAL void cache_drain(struct mem_cache *cache)
 {
 	struct mem_zone *zone = cache->zone;
 	spin_lock(&zone->lock);
@@ -142,7 +119,7 @@ static void cache_drain(struct mem_cache *cache)
 		}
 		struct mem_chunk *chunk = \
 			container_of(head, struct mem_chunk, in_queue);
-		struct mem_page *page = page_from_chunk(chunk);
+		struct mem_page *page = _page_from_chunk(chunk);
 		queue_put_head(&chunk->in_queue,
 			       &page->queue_of_free_chunks);
 		if (page->free_chunks == 0) {
@@ -163,11 +140,18 @@ static void cache_drain(struct mem_cache *cache)
 static void page_alloc(struct mem_zone *zone)
 {
 	void *ptr;
-	int r = posix_memalign(&ptr, MEM_PAGE_SIZE, MEM_PAGE_SIZE);
+	int r = posix_memalign(&ptr, PAGE_SIZE, PAGE_SIZE);
 	if (r != 0) {
 		/* TODO: attempt to reclaim some memory before failing? */
-		pfatal("posix_memalign(%i, %i)", MEM_PAGE_SIZE, MEM_PAGE_SIZE);
+		pfatal("posix_memalign(%i, %i)", PAGE_SIZE, PAGE_SIZE);
 	}
+
+	#ifdef VALGRIND
+	VALGRIND_CREATE_MEMPOOL(ptr, 0, 0);
+	VALGRIND_MAKE_MEM_NOACCESS(ptr + sizeof(struct mem_page),
+		PAGE_SIZE - sizeof(struct mem_page));
+	#endif
+
 	struct mem_page *page = (struct mem_page*)ptr;
 	list_add(&page->in_list,
 		 &zone->list_of_pages);
@@ -181,6 +165,9 @@ static void page_alloc(struct mem_zone *zone)
 	for (i=0; i < page->free_chunks; i++) {
 		struct mem_chunk *chunk = (struct mem_chunk*)chunk_ptr;
 		chunk_ptr += zone->aligned_chunk_size;
+		#ifdef VALGRIND
+		VALGRIND_MAKE_MEM_DEFINED(chunk, sizeof(struct mem_chunk));
+		#endif
 		queue_put_head(&chunk->in_queue,
 			       &page->queue_of_free_chunks);
 	}
@@ -192,8 +179,22 @@ static void page_free(struct mem_zone *zone, struct mem_page *page)
 	if (page->free_chunks != zone->chunks_per_page) {
 		abort();
 	}
+
 	zone->free_chunks -= page->free_chunks;
 	list_del(&page->in_list);
+	#ifdef VALGRIND
+	VALGRIND_DESTROY_MEMPOOL(page);
+	VALGRIND_MAKE_MEM_NOACCESS(page, PAGE_SIZE);
+	#endif
 	free(page);
 	zone->freed_pages++;
+}
+
+DLL_LOCAL unsigned long zone_used_bytes(struct mem_zone *zone)
+{
+	unsigned long pages;
+	spin_lock(&zone->lock);
+	pages = zone->alloc_pages - zone->freed_pages;
+	spin_unlock(&zone->lock);
+	return pages * PAGE_SIZE;
 }
