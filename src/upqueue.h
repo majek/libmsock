@@ -36,6 +36,7 @@ static inline void INIT_QUEUE_HEAD(struct queue_head *item)
 	item->next = QUEUE_POISON1;
 }
 
+
 /* Returns 1 if the queue was empty 0 otherwise. */
 static inline int queue_put(struct queue_head *new,
 			    struct queue_root *root)
@@ -96,10 +97,15 @@ static inline void queue_splice(struct queue_root *src,
 	if (src->first == NULL) {
 		return;
 	}
-	struct queue_head *a = src->first;
-	struct queue_head *b = a->next;
-	queue_put(a, dst);
-	a->next = b;
+
+	if (!dst->last) {
+		dst->first = src->first;
+		dst->last = src->last;
+	} else {
+		dst->last->next = src->first;
+		dst->last = src->last;
+	}
+
 	INIT_QUEUE_ROOT(src);
 }
 
