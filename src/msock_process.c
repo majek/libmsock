@@ -12,7 +12,7 @@ DLL_LOCAL struct process *process_new(struct domain *domain,
 
 	process->domain = domain;
 	unsigned long poff = umap_add(domain->poff_to_process, process);
-	if (poff == 0) {
+	if (unlikely(poff == 0)) {
 		fatal("Not enough slots for new processes!");
 	}
 	process->pid = poff_gid_to_pid(poff, domain->gid);
@@ -26,7 +26,7 @@ DLL_LOCAL struct process *process_new(struct domain *domain,
 	process->receive_callback = receive_callback;
 	process->receive_data = receive_data;
 
-	if (procopt & PROCOPT_HUNGRY) {
+	if (unlikely(procopt & PROCOPT_HUNGRY)) {
 		list_add(&process->in_hungry_list,
 			 &domain->list_of_hungry_processes);
 	}
@@ -68,7 +68,7 @@ DLL_LOCAL void process_run(struct process *process)
 
 	while (1) {
 		struct queue_head *head = queue_get(&process->inbox);
-		if (head == NULL) {
+		if (unlikely(head == NULL)) {
 			break;
 		}
 		struct message *msg = container_of(head, struct message, in_queue);
@@ -105,7 +105,7 @@ DLL_LOCAL void process_run(struct process *process)
 }
 
 
-DLL_PUBLIC void msock_receive(msock_callback_t callback,
+DLL_PUBLIC int msock_receive(msock_callback_t callback,
 			      void *process_data)
 {
 	struct process *process = get_current_process();
@@ -113,5 +113,6 @@ DLL_PUBLIC void msock_receive(msock_callback_t callback,
 	process->receive_data = process_data;
 	queue_splice_prepend(&process->badmatch,
 			     &process->inbox);
+	return RECV_OK;
 }
 

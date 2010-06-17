@@ -38,24 +38,30 @@ enum msock_recv {
 	RECV_OK_YIELD
 };
 
-typedef enum msock_recv (*msock_callback_t)(int msg_type,
+typedef int (*msock_construct_t)(void *process_data);
+
+typedef int (*msock_callback_t)(int msg_type,
 				void *msg_payload, int msg_payload_sz,
 				void *process_data);
 
 /* Starts new 'process'. */
-DLL_PUBLIC msock_pid_t msock_base_spawn(msock_base base,
+DLL_PUBLIC msock_pid_t msock_base_spawn(msock_base ubase,
 					msock_callback_t callback,
 					void *process_data);
 
-DLL_PUBLIC msock_pid_t msock_spawn(msock_callback_t callback,
+DLL_PUBLIC msock_pid_t msock_base_spawn2(msock_base base,
+					 msock_construct_t constructor,
+					 void *process_data);
+
+DLL_PUBLIC msock_pid_t msock_spawn2(msock_construct_t constructor,
 				   void *process_data);
 
 /* Who am I? */
 DLL_PUBLIC msock_pid_t msock_self();
 
 /* Change the callback (receiver) for current 'process'. */
-DLL_PUBLIC void msock_receive(msock_callback_t callback,
-			      void *process_data);
+DLL_PUBLIC int msock_receive(msock_callback_t callback,
+			     void *process_data);
 
 
 DLL_PUBLIC void msock_base_loop(msock_base base);
@@ -79,6 +85,8 @@ struct msock_msg_signal {
 enum msock_msgs {
 	MSG_FD_READ,
 	MSG_FD_WRITE,
+	MSG_FD_CLOSE,
+
 	MSG_FD_TIMEOUTED,
 	MSG_FD_REGISTER_READ,
 	MSG_FD_REGISTER_WRITE,
@@ -124,6 +132,9 @@ DLL_PUBLIC extern unsigned long msock_now_msecs; /* Monotonic time in ms */
 
 DLL_PUBLIC void msock_send_msg_fd(int msg_type, int fd,
 				  unsigned long timeout_msecs);
+DLL_PUBLIC void msock_victim_send_msg_fd(msock_pid_t victim,
+					 int msg_type, int fd,
+					 unsigned long timeout_msecs);
 DLL_PUBLIC void msock_base_send_msg_fd(msock_base base,
 				       msock_pid_t victim,
 				       int msg_type, int fd,
@@ -139,6 +150,9 @@ DLL_PUBLIC void msock_base_send_msg_signal(msock_base base,
 					   msock_pid_t victim,
 					   int msg_type,
 					   int signum);
+DLL_PUBLIC void msock_send_msg_signal(int msg_type,
+				      int signum);
+
 DLL_PUBLIC void msock_memory_collect();
 DLL_PUBLIC void msock_memory_stats(unsigned long *used_bytes_ptr);
 

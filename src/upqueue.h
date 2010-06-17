@@ -25,10 +25,11 @@ static inline void INIT_QUEUE_ROOT(struct queue_root *root)
 
 static inline int queue_empty(struct queue_root *root)
 {
-	if (root->first == NULL) {
+	if (root->first != NULL) {
+		return 0;
+	} else {
 		return 1;
 	}
-	return 0;
 }
 
 static inline void INIT_QUEUE_HEAD(struct queue_head *item)
@@ -42,14 +43,14 @@ static inline int queue_put(struct queue_head *new,
 			    struct queue_root *root)
 {
 	new->next = NULL;
-	if (!root->last) {
-		root->first = new;
-		root->last = new;
-		return 1;
-	} else {
+	if (root->last) {
 		root->last->next = new;
 		root->last = new;
 		return 0;
+	} else {
+		root->first = new;
+		root->last = new;
+		return 1;
 	}
 }
 
@@ -57,13 +58,13 @@ static inline int queue_put_head(struct queue_head *new,
 				 struct queue_root *root)
 {
 	new->next = root->first;
-	if (!root->first) {
+	if (root->first) {
+		root->first = new;
+		return 0;
+	} else {
 		root->first = new;
 		root->last = new;
 		return 1;
-	} else {
-		root->first = new;
-		return 0;
 	}
 }
 
@@ -77,7 +78,7 @@ static inline int queue_is_enqueued(struct queue_head *item)
 
 static inline struct queue_head *queue_get(struct queue_root *root)
 {
-	if (!root->first) {
+	if (unlikely(!root->first)) {
 		return NULL;
 	}
 	struct queue_head *item = root->first;
@@ -94,15 +95,15 @@ static inline struct queue_head *queue_get(struct queue_root *root)
 static inline void queue_splice(struct queue_root *src,
 				struct queue_root *dst)
 {
-	if (src->first == NULL) {
+	if (unlikely(src->first == NULL)) {
 		return;
 	}
 
-	if (!dst->last) {
-		dst->first = src->first;
+	if (dst->last) {
+		dst->last->next = src->first;
 		dst->last = src->last;
 	} else {
-		dst->last->next = src->first;
+		dst->first = src->first;
 		dst->last = src->last;
 	}
 
@@ -112,7 +113,7 @@ static inline void queue_splice(struct queue_root *src,
 static inline void queue_splice_prepend(struct queue_root *src,
 					struct queue_root *dst)
 {
-	if (src->first == NULL) {
+	if (unlikely(src->first == NULL)) {
 		return;
 	}
 	struct queue_head *first = dst->first;

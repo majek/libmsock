@@ -61,6 +61,7 @@ static void select_constructor(struct base *base,
 	if (pipe(pipefd) != 0) {
 		pfatal("pipe()");
 	}
+	set_nonblocking(pipefd[1]);
 	sd->pipe_read = pipefd[0];
 	set_msock_now_msecs();
 	INIT_TIMER_BASE(&sd->tbase, msock_now_msecs);

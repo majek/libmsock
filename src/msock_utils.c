@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,4 +85,17 @@ DLL_LOCAL void set_msock_now_msecs()
 
 	// make helgrind happy...
 	msock_now_msecs = now_msecs();
+}
+
+DLL_LOCAL void set_nonblocking(int fd)
+{
+	int flags, ret;
+	flags = fcntl(fd, F_GETFL, 0);
+	if (unlikely(-1 == flags)) { // no coverage
+		flags = 0;
+	}
+	ret = fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+	if (unlikely(-1 == ret)) { // no coverage
+		pfatal("fcntl()");
+	}
 }

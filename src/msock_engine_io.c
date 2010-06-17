@@ -10,10 +10,10 @@ struct io_data {
 	int pipe_read;
 };
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data);
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data);
 
 static void io_constructor(struct base *base,
 			   struct engine_proto *proto,
@@ -25,6 +25,8 @@ static void io_constructor(struct base *base,
 	if (pipe(pipefd) != 0) {
 		pfatal("pipe()");
 	}
+	/* Reading end definetely must block. */
+	set_nonblocking(pipefd[1]);
 	id->pipe_read = pipefd[0];
 
 	struct domain *domain = domain_new(base, proto, (void*)(long)pipefd[1], 1);
@@ -82,10 +84,10 @@ struct msock_msg_io {
 	int saved_errno;
 };
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data)
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data)
 {
 	struct io_data *id = (struct io_data*)process_data;
 	struct msock_msg_io *msg = (struct msock_msg_io *)msg_payload;

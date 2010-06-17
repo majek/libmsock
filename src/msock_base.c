@@ -58,7 +58,7 @@ inline static void _send_indirect(struct domain *domain,
 		      msg_payload_sz, (int)sizeof(msg->msg_payload));
 	}
 	if (likely(msg_payload_sz)) {
-		fast_memcpy(msg->msg_payload, msg_payload, msg_payload_sz);
+		memcpy(msg->msg_payload, msg_payload, msg_payload_sz);
 	}
 
 	/* sending to my domain? - skip outbox */
@@ -119,7 +119,7 @@ DLL_LOCAL void drain_message_queue(struct domain *domain, struct queue_root *msg
 {
 	while (1) {
 		struct queue_head *head = queue_get(msgbox);
-		if (head == NULL) {
+		if (unlikely(head == NULL)) {
 			break;
 		}
 		struct message *msg = container_of(head, struct message, in_queue);
@@ -167,6 +167,17 @@ DLL_LOCAL msock_pid_t spawn(struct domain *domain,
 	return process->pid;
 }
 
+void run_constructor(struct domain *domain,
+		     msock_pid_t pid, msock_construct_t constructor,
+		     void *process_data)
+{
+	struct process *oldproc = _current_process;
+	_current_process = (struct process*)				\
+		umap_get(domain->poff_to_process, pid_to_poff(pid));
+	constructor(process_data);
+	_current_process = oldproc;
+}
+
 DLL_PUBLIC msock_pid_t msock_base_spawn(msock_base ubase,
 					msock_callback_t callback,
 					void *process_data)
@@ -177,11 +188,32 @@ DLL_PUBLIC msock_pid_t msock_base_spawn(msock_base ubase,
 	return spawn(domain, callback, process_data, 0);
 }
 
+DLL_PUBLIC msock_pid_t msock_base_spawn2(msock_base ubase,
+					 msock_construct_t constructor,
+					 void *process_data)
+{
+	struct base *base = ubase;
+	/* Doesn't really matter which domain is the source/ */
+	struct domain *domain = base->gid_to_domain[1];
+	msock_pid_t pid = spawn(domain, NULL, NULL, 0);
+	run_constructor(domain, pid, constructor, process_data);
+	return pid;
+}
+
 DLL_PUBLIC msock_pid_t msock_spawn(msock_callback_t callback,
 				   void *process_data)
 {
 	struct domain *domain = get_current_process()->domain;
 	return spawn(domain, callback, process_data, 0);
+}
+
+DLL_PUBLIC msock_pid_t msock_spawn2(msock_construct_t constructor,
+				    void *process_data)
+{
+	struct domain *domain = get_current_process()->domain;
+	msock_pid_t pid = spawn(domain, NULL, NULL, 0);
+	run_constructor(domain, pid, constructor, process_data);
+	return pid;
 }
 
 DLL_PUBLIC msock_pid_t msock_self()

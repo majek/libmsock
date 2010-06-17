@@ -93,8 +93,8 @@ static inline void dispatch_msg_single(struct process *process, struct message *
 static struct message *message_clone(struct domain *domain, struct message *org)
 {
 	struct message *dst = cache_malloc(&domain->cache_messages, struct message);
-	fast_memcpy(dst, org, sizeof(struct message) -
-		    MAX_MSG_PAYLOAD_SZ + org->msg_payload_sz);
+	memcpy(dst, org, sizeof(struct message) -
+	       MAX_MSG_PAYLOAD_SZ + org->msg_payload_sz);
 	return dst;
 }
 
@@ -122,7 +122,8 @@ static void dispatch_special(struct domain *domain, struct message *msg)
 	}
 }
 
-DLL_LOCAL int dispatch_msg_local(struct domain *domain, struct message *msg)
+DLL_LOCAL int dispatch_msg_local(struct domain *domain,
+				 struct message *msg)
 {
 	int counter = 0;
 	unsigned long poff = pid_to_poff(msg->target);
@@ -130,7 +131,7 @@ DLL_LOCAL int dispatch_msg_local(struct domain *domain, struct message *msg)
 		struct process *process = (struct process*)	\
 			umap_get(domain->poff_to_process, poff);
 
-		if (likely(process != NULL)) {
+		if (process != NULL) {
 			counter ++;
 			dispatch_msg_single(process, msg);
 		} else { // process == NULL
@@ -138,12 +139,12 @@ DLL_LOCAL int dispatch_msg_local(struct domain *domain, struct message *msg)
 		}
 	} else { // poff == 0,  aka broadcast
 		counter ++;
-		if (msg->msg_type == MSG_GC) {
-			/* special messages - to domain, not to processes */
-			dispatch_special(domain, msg);
-		} else {
+		if (msg->msg_type != MSG_GC) {
 			/* normal broadcast - copy over to everybody */
 			dispatch_msg_broadcast(domain, msg);
+		} else {
+			/* special messages - to domain, not to processes */
+			dispatch_special(domain, msg);
 		}
 	}
 	return counter;
@@ -154,7 +155,7 @@ static int dispatch_local_inbox(struct domain *domain)
 	int counter = 0;
 	while (1) {
 		struct queue_head *head = queue_get(&domain->local_inbox);
-		if (head == NULL) {
+		if (unlikely(head == NULL)) {
 			break;
 		}
 		struct message *msg = \
@@ -169,7 +170,7 @@ static void process_queue_run(struct domain *domain)
 	while (1) {
 		struct queue_head *head = \
 			queue_get(&domain->queue_of_busy_processes);
-		if (head == NULL) {
+		if (unlikely(head == NULL)) {
 			break;
 		}
 		struct process *process = \
@@ -194,7 +195,7 @@ DLL_LOCAL int domain_run(struct domain *domain)
 		process_queue_run(domain);
 
 		int delivered = dispatch_local_inbox(domain);
-		if (delivered == 0) {
+		if (unlikely(delivered == 0)) {
 			break;
 		}
 	}

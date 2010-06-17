@@ -71,7 +71,7 @@ DLL_LOCAL void worker_loop(struct base *base)
 	while (1) {
 		struct msqueue_head *head = \
 			msqueue_get(&base->queue_of_domains);
-		if (head == NULL) {
+		if (unlikely(head == NULL)) {
 			break;
 		}
 		struct domain *domain = \

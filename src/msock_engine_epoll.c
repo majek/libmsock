@@ -27,10 +27,10 @@ struct local_data {
 	struct timer_base tbase;
 };
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data);
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data);
 
 static void schedule_change(struct local_data *sd,
 			    msock_pid_t victim,
@@ -72,6 +72,7 @@ static void epoll_constructor(struct base *base,
 	if (pipe(pipefd) != 0) {
 		pfatal("pipe()");
 	}
+	set_nonblocking(pipefd[1]);
 	sd->pipe_read = pipefd[0];
 
 	struct domain *domain = domain_new(base, proto, (void*)(long)pipefd[1], 1);
@@ -83,6 +84,7 @@ static void epoll_constructor(struct base *base,
 
 static void epoll_data_free(struct local_data *sd)
 {
+	close(sd->epfd);
 	close(sd->pipe_read);
 	msock_safe_free(sizeof(struct local_item) * sd->map_sz, sd->map);
 	type_free(struct local_data, sd);
@@ -183,6 +185,9 @@ static void process_block(struct local_data *sd)
 				fatal("wtf?");
 			} else {
 				r = epoll_ctl(sd->epfd, EPOLL_CTL_DEL, li->fd, &ev);
+				if (r == -1 && errno == EBADF) {
+					r = 0;
+				}
 			}
 		}
 		li->epoll_mask = li->new_mask;
@@ -222,6 +227,9 @@ do_again:;
 			} else if (events[i].events & EPOLLOUT) {
 				send_msg_helper(sd->map[fd].victim,
 						MSG_FD_WRITE, fd);
+			} else if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+				send_msg_helper(sd->map[fd].victim,
+						MSG_FD_CLOSE, fd);
 			} else {
 				fatal("ftf?");
 			}
@@ -236,10 +244,10 @@ do_again:;
 
 
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data)
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data)
 {
 	struct local_data *sd = (struct local_data*)process_data;
 	struct msock_msg_fd *msg = (struct msock_msg_fd *)msg_payload;

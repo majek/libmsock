@@ -6,11 +6,18 @@ else
   LD = $(CC)
 endif
 
+
+#SH=--coverage -O2 -DHELGRIND
+#SH=--coverage -O2
+#SH=--profile-generate
+SH=-O2
+
 COPTS = -Wall -fpic -ftls-model=initial-exec -g \
 	-march=native -mtune=native		\
-	-DHELGRIN -O2
+	$(SH)
 
-LDFLAGS = -g
+LDFLAGS = -g $(SH)
+
 LDOPTS  = -lpthread -fpic -lrt
 
 ECHO = echo
@@ -19,7 +26,6 @@ OBJS = 	\
 	msock_base.o		\
 	msock_domain.o		\
 	msock_engine.o		\
-	msock_mpool.o		\
 	msock_process.o		\
 	msock_reg.o		\
 	msock_utils.o		\
@@ -66,6 +72,10 @@ example06: src/rel/example06.o libmsock.so
 clean::
 	rm -f example06
 
+example07: src/rel/example07.o libmsock.so
+	$(LD) $(LDFLAGS) -Wl,-rpath=. -o $@ $^ -lmsock -L. -lrt
+clean::
+	rm -f example07
 
 libmsock.so:: $(patsubst %, src/rel/%, $(OBJS))
 	$(LD) $(LDFLAGS) -shared -o $@ $^ $(LDOPTS)

@@ -4,6 +4,9 @@ static void engine_user_constructor(struct base *base,
 				    struct engine_proto *proto,
 				    int user_max_processes)
 {
+	if (user_max_processes == 0) {
+		user_max_processes = get_max_open_files()+1;
+	}
 	domain_new(base, proto, NULL, user_max_processes);
 	return;
 }

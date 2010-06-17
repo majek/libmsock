@@ -58,6 +58,7 @@ DLL_LOCAL void safe_printf(const char *fmt, ...) __attribute__ ((format (printf,
 DLL_LOCAL int get_max_open_files();
 DLL_LOCAL unsigned long long now_msecs();
 DLL_LOCAL void set_msock_now_msecs();
+DLL_LOCAL void set_nonblocking(int fd);
 
 
 static inline void *msock_safe_malloc(size_t size)

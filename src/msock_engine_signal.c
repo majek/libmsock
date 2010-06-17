@@ -23,27 +23,31 @@
 
 #define MAX_SIGNALS (SIGUNUSED+1)
 
+struct remote_data {
+	sigset_t org_blocked;	/* Blocked before entering our code. */
+	int pipe_write;
+};
 
 struct local_data {
 	int pipe_read;
-	sigset_t blocked;
+	sigset_t blocked;	/* Blocked for all the threads. */
+	sigset_t handled;	/* Handled by us any more. */
+	sigset_t prev_handled;
 	msock_pid_t victims[MAX_SIGNALS];
 };
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data);
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data);
 
 static __thread struct local_data *handler_sd;
 static void signal_handler(int signum, siginfo_t *si, void *ucontext)
 {
-	if (handler_sd == NULL) {
-		fatal("Signal %i not blocked correctly!", signum);
+	if (unlikely(handler_sd == NULL)) {
+		fatal("Signal %i not handled correctly!", signum);
 	}
-	printf("got signal %i\n", signum);
 	if (handler_sd->victims[signum] ) {
-		printf("sending to %s\n", pid_tostr(handler_sd->victims[signum]));
 		struct msock_msg_signal msg;
 
 		msg.signum = signum;
@@ -52,6 +56,9 @@ static void signal_handler(int signum, siginfo_t *si, void *ucontext)
 		msock_send(handler_sd->victims[signum],
 			   MSG_SIGNAL,
 			   (void*)&msg, sizeof(msg));
+
+		handler_sd->victims[signum] = NULL;
+		sigdelset(&handler_sd->handled, signum);
 	} else {
 		// Signal is not handled by anyone - just ignore it.
 	}
@@ -63,14 +70,22 @@ static void engine_constructor(struct base *base,
 			       int user_max_processes)
 {
 	struct local_data *sd = type_malloc(struct local_data);
+	sigset_t org_blocked;
 
 	int pipefd[2];
 	if (pipe(pipefd) != 0) {
 		pfatal("pipe()");
 	}
+	set_nonblocking(pipefd[0]);
+	set_nonblocking(pipefd[1]);
+
 	sd->pipe_read = pipefd[0];
 
-	// assuming we're not in the threaded environment
+	sigemptyset(&org_blocked);
+	sigemptyset(&sd->handled);
+	sigemptyset(&sd->prev_handled);
+
+	// Beware if we're not in the threaded environment
 	sigfillset(&sd->blocked);
 	// there's no point in blocking following signals
 	sigdelset(&sd->blocked, SIGKILL);
@@ -82,25 +97,27 @@ static void engine_constructor(struct base *base,
 	sigdelset(&sd->blocked, SIGABRT);
 	sigdelset(&sd->blocked, 64); /* SIGRT32 is used by valgrind. */
 
-	int r = sigprocmask(SIG_BLOCK, &sd->blocked, NULL);
+	int r = sigprocmask(SIG_BLOCK, &sd->blocked, &org_blocked);
 	if (r != 0) {
 		fatal("sigprocmask(SIG_BLOCK, *)");
 	}
 
-	int i;
-	for (i=1; i < MAX_SIGNALS; i++) {
-		if (sigismember(&sd->blocked, i)) {
-			struct sigaction sa;
-			memset(&sa, 0, sizeof(sa));
-			sa.sa_sigaction = &signal_handler;
-			sa.sa_mask = sd->blocked; // serialize all signals
-			sa.sa_flags = SA_SIGINFO;
-			sigaction(i, &sa, NULL);
-		}
-	}
+	/* Restore default handlers. */
+	/* int i; */
+	/* for (i=1; i < MAX_SIGNALS; i++) { */
+	/* 	if (sigismember(&sd->blocked, i)) { */
+	/* 		struct sigaction sa; */
+	/* 		memset(&sa, 0, sizeof(sa)); */
+	/* 		sa.sa_handler = SIG_DFL; */
+	/* 		sigaction(i, &sa, NULL); */
+	/* 	} */
+	/* } */
 
-	struct domain *domain = domain_new(base, proto,
-					   (void*)(long)pipefd[1], 1);
+	struct remote_data *rd = type_malloc(struct remote_data);
+	rd->pipe_write = pipefd[1];
+	rd->org_blocked = org_blocked;
+
+	struct domain *domain = domain_new(base, proto, rd, 1);
 	msock_pid_t pid = spawn(domain, process_callback, sd, PROCOPT_HUNGRY);
 	msock_register(domain->base, pid, PID_SIGNAL);
 	return;
@@ -108,30 +125,37 @@ static void engine_constructor(struct base *base,
 
 static void engine_data_free(struct local_data *sd)
 {
+	close(sd->pipe_read);
 	int i;
 	for (i=1; i < MAX_SIGNALS; i++) {
-		if (sigismember(&sd->blocked, i)) {
+		if (sigismember(&sd->handled, i)) {
 			struct sigaction sa;
 			memset(&sa, 0, sizeof(sa));
 			sa.sa_handler = SIG_DFL;
 			sigaction(i, &sa, NULL);
 		}
 	}
-
 	type_free(struct local_data, sd);
 }
 
 
 static void engine_destructor(void *ingress_callback_data)
 {
-	int pipe_write = (long)ingress_callback_data;
-	close(pipe_write);
+	struct remote_data *rd = (struct remote_data*)ingress_callback_data;
+	int r = sigprocmask(SIG_SETMASK, &rd->org_blocked, NULL);
+	if (r != 0) {
+		fatal("sigprocmask(SIG_SETMASK, old_mask)");
+	}
+
+	close(rd->pipe_write);
+
+	type_free(struct remote_data, rd);
 }
 
 static void engine_ingress_callback(void *ingress_callback_data)
 {
-	int pipe_write = (long)ingress_callback_data;
-	int r = write(pipe_write, "x", 1);
+	struct remote_data *rd = (struct remote_data*)ingress_callback_data;
+	int r = write(rd->pipe_write, "x", 1);
 	if (r == -1) {
 		perror("write(pipe)");
 	}
@@ -150,6 +174,28 @@ REGISTER_ENGINE(MSOCK_ENGINE_MASK_SIGNAL, &engine_user);
 
 static void process_block(struct local_data *sd)
 {
+	/* Set proper signal handlers. */
+	int i;
+	for (i=1; i < MAX_SIGNALS; i++) {
+		struct sigaction sa;
+		int in_prev_handled = sigismember(&sd->prev_handled, i);
+		int in_handled = sigismember(&sd->handled, i);
+		if (!in_prev_handled && in_handled) { // add our handler
+			memset(&sa, 0, sizeof(sa));
+			sa.sa_sigaction = &signal_handler;
+			sa.sa_mask = sd->blocked; // serialize all signals
+			sa.sa_flags = SA_SIGINFO;
+			sigaction(i, &sa, NULL);
+		}
+		if (in_prev_handled && !in_handled) { // go back do default
+			memset(&sa, 0, sizeof(sa));
+			sa.sa_handler = SIG_DFL;
+			sigaction(i, &sa, NULL);
+		}
+	}
+	sd->prev_handled = sd->handled;
+
+
 	sigset_t nothandled;
 	sigemptyset(&nothandled);
 
@@ -169,7 +215,7 @@ static void process_block(struct local_data *sd)
 		if (errno != EINTR) {
 			pfatal("pselect()");
 		}
-		// do break on signal - to flush message buffer
+		// break on signal - to flush message buffer
 	} else if (r == 0) {
 		// timeout
 	} else {
@@ -178,10 +224,10 @@ static void process_block(struct local_data *sd)
 	}
 }
 
-static enum msock_recv process_callback(int msg_type,
-					void *msg_payload,
-					int msg_payload_sz,
-					void *process_data)
+static int process_callback(int msg_type,
+			    void *msg_payload,
+			    int msg_payload_sz,
+			    void *process_data)
 {
 	struct local_data *sd = (struct local_data *)process_data;
 	struct msock_msg_signal *msg = (struct msock_msg_signal *)msg_payload;
@@ -189,9 +235,11 @@ static enum msock_recv process_callback(int msg_type,
 	switch (msg_type) {
 	case MSG_SIGNAL_REGISTER:
 		sd->victims[msg->signum] = msg->victim;
+		sigaddset(&sd->handled, msg->signum);
 		break;
 	case MSG_SIGNAL_UNREGISTER:
 		sd->victims[msg->signum] = NULL;
+		sigdelset(&sd->handled, msg->signum);
 		break;
 
 	case MSG_EXIT:
@@ -221,4 +269,16 @@ DLL_PUBLIC void msock_base_send_msg_signal(msock_base base,
 			PID_SIGNAL,
 			msg_type,
 			&msg, sizeof(msg));
+}
+
+DLL_PUBLIC void msock_send_msg_signal(int msg_type,
+				      int signum)
+{
+	struct msock_msg_signal msg;
+	msg.signum = signum;
+	msg.victim = msock_self();
+
+	msock_send(PID_SIGNAL,
+		   msg_type,
+		   &msg, sizeof(msg));
 }
